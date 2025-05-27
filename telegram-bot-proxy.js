@@ -1,6 +1,3 @@
-// Telegram Bot API base URL
-const TELEGRAM_API_BASE = 'https://api.telegram.org';
-
 // HTML template for documentation
 const DOC_HTML = `<!DOCTYPE html>
 <html>
@@ -86,89 +83,73 @@ fetch('https://{YOUR_WORKER_URL}/bot{YOUR_BOT_TOKEN}/sendMessage', {
 </body>
 </html>`;
 
+// Handle main request
 async function handleRequest(request) {
-  // Clone the request to modify it
-  const requestClone = new Request(request);
   const url = new URL(request.url);
 
-  // If accessing the root path, show documentation
+  // Serve documentation at root
   if (url.pathname === '/' || url.pathname === '') {
     return new Response(DOC_HTML, {
       headers: {
-        'Content-Type': 'text/html;charset=UTF-8',
+        'Content-Type': 'text/html; charset=UTF-8',
         'Cache-Control': 'public, max-age=3600',
-      },
+      }
     });
   }
 
-  // Extract the bot token and method from the URL path
-  // Expected format: /bot{token}/{method}
-  const pathParts = url.pathname.split('/').filter(Boolean);
-  
-  if (pathParts.length < 2 || !pathParts[0].startsWith('bot')) {
-    return new Response('Invalid bot request format', { status: 400 });
-  }
+  // Replace domain
+  const proxyUrl = request.url.replace(url.hostname, 'api.telegram.org');
 
-  // Reconstruct the Telegram API URL
-  const telegramUrl = new URL(
-    `${TELEGRAM_API_BASE}${url.pathname}${url.search}`
-  );
-
-  // Create headers for the new request
-  const headers = new Headers(request.headers);
-  
-  // Forward the request to Telegram API
-  const telegramRequest = new Request(telegramUrl, {
-    method: requestClone.method,
-    headers: headers,
-    body: requestClone.method !== 'GET' ? await request.clone().arrayBuffer() : undefined,
+  // Rebuild request
+  const newRequest = new Request(proxyUrl, {
+    method: request.method,
+    headers: request.headers,
+    body: request.method === 'GET' || request.method === 'HEAD' ? null : request.body,
     redirect: 'follow',
   });
 
   try {
-    const response = await fetch(telegramRequest);
-    
-    // Create a new response with the Telegram API response
-    const newResponse = new Response(response.body, {
+    const response = await fetch(newRequest);
+
+    // Add CORS headers
+    const responseHeaders = new Headers(response.headers);
+    responseHeaders.set('Access-Control-Allow-Origin', '*');
+    responseHeaders.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    responseHeaders.set('Access-Control-Allow-Headers', 'Content-Type');
+
+    const responseBody = await response.arrayBuffer();
+    return new Response(responseBody, {
       status: response.status,
       statusText: response.statusText,
-      headers: response.headers,
+      headers: responseHeaders,
     });
-
-    // Add CORS headers to allow requests from any origin
-    newResponse.headers.set('Access-Control-Allow-Origin', '*');
-    newResponse.headers.set('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    newResponse.headers.set('Access-Control-Allow-Headers', 'Content-Type');
-
-    return newResponse;
-  } catch (error) {
-    return new Response(`Error proxying request: ${error.message}`, { status: 500 });
+  } catch (err) {
+    return new Response(`Error: ${err.message || err.toString()}`, {
+      status: 500,
+      headers: { 'Content-Type': 'text/plain' },
+    });
   }
 }
 
-// Handle OPTIONS requests for CORS
-function handleOptions(request) {
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Max-Age': '86400',
-  };
-
+// Handle CORS preflight
+function handleOptions() {
   return new Response(null, {
     status: 204,
-    headers: corsHeaders,
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers': 'Content-Type',
+      'Access-Control-Max-Age': '86400',
+    },
   });
 }
 
-// Main event listener for the worker
+// Worker entry point
 addEventListener('fetch', event => {
-  const request = event.request;
-  
-  // Handle CORS preflight requests
-  if (request.method === 'OPTIONS') {
-    event.respondWith(handleOptions(request));
+  const req = event.request;
+  if (req.method === 'OPTIONS') {
+    event.respondWith(handleOptions());
   } else {
-    event.respondWith(handleRequest(request));
+    event.respondWith(handleRequest(req));
   }
-}); 
+});
